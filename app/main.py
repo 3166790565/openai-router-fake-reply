@@ -122,23 +122,27 @@ def hit_keyword(text: str, rule: Rule) -> tuple[bool, str]:
     """判断消息是否命中假回复。返回 (是否命中, 命中方式)。
 
     命中方式: "pattern" | "keyword" | ""（未命中）
-    三重闸门：长度 → 工作词黑名单 → 句首位置。
+    闸门顺序：工作词黑名单（硬闸门，最高优先）→ 长度 → 正则整句模板 → 关键词句首。
+    任务词命中直接放行走上游，正则/关键词都碰不到，防止"帮我写，你是谁?"被劫持。
     """
     t = (text or "").strip()
-    if not t or len(t) > rule.match_max_length:
+    if not t:
         return False, ""
-    # 正则整句模板优先
+    # 1. 工作词黑名单：命中任一 → 强制走上游（最高优先级）
+    tl = t.lower()
+    if any(w.strip() and w.lower() in tl for w in rule.work_override):
+        return False, "work_override"
+    # 2. 长度闸门
+    if len(t) > rule.match_max_length:
+        return False, "length"
+    # 3. 正则整句模板：匹配整句形状的身份询问
     for pat in rule.patterns:
         try:
             if re.search(pat, t, re.IGNORECASE):
                 return True, "pattern"
         except re.error:
             continue
-    # 工作词黑名单：命中任一 → 强制走上游
-    tl = t.lower()
-    if any(w.strip() and w.lower() in tl for w in rule.work_override):
-        return False, "work_override"
-    # 关键词：限制在句首前 N 字内
+    # 4. 关键词：限制在句首前 N 字内
     head = tl[: rule.match_head_chars]
     if any(k.strip() and k.strip().lower() in head for k in rule.keywords):
         return True, "keyword"
