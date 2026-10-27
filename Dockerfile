@@ -8,6 +8,15 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DEFAULT_TIMEOUT=300 \
     PIP_RETRIES=5
 
+# 构建时注入 git 版本号（deploy 脚本会传 --build-arg）
+ARG GIT_COMMIT=unknown
+ARG GIT_BRANCH=unknown
+LABEL git.commit="${GIT_COMMIT}" \
+      git.branch="${GIT_BRANCH}" \
+      org.opencontainers.image.revision="${GIT_COMMIT}"
+ENV APP_GIT_COMMIT="${GIT_COMMIT}" \
+    APP_GIT_BRANCH="${GIT_BRANCH}"
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

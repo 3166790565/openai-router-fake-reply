@@ -1,6 +1,10 @@
 services:
   proxy:
-    build: .
+    build:
+      context: .
+      args:
+        GIT_COMMIT: ${GIT_COMMIT:-unknown}
+        GIT_BRANCH: ${GIT_BRANCH:-unknown}
     container_name: openai-router
     ports:
       - "8000:8000"

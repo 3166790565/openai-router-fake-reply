@@ -112,6 +112,36 @@ curl -N http://localhost:8000/v1/chat/completions \
 - `/v1/*` 永远不受 WebUI 认证影响，客户端调用不受干扰。
 - **公网部署务必设置 `WEBUI_USER` / `WEBUI_PASS`。**
 
+### 服务器一键更新（智能重建）
+
+`docker compose up -d` 在镜像已存在时不会重建，只重启旧镜像。项目提供 `deploy.sh`（Linux/Git Bash）与 `deploy.ps1`（Windows PowerShell）：
+
+- 自动 `git fetch` 比对本地与远端 HEAD
+- **有更新**：`git pull` + `docker compose up -d --build`（重建镜像，并把当前 git commit 注入镜像 label 与环境变量 `APP_GIT_COMMIT`）
+- **无更新**：仅 `docker compose up -d --no-build`（秒级启动，不重建）
+
+```bash
+# Linux / Git Bash
+./deploy.sh
+
+# Windows PowerShell
+.\deploy.ps1
+```
+
+部署后可查容器对应的 git 版本：
+
+```bash
+docker inspect openai-router --format '{{ index .Config.Labels "git.commit" }}'
+# 或进容器
+docker exec openai-router env | grep APP_GIT
+```
+
+不想用脚本、确定要强制重建时，手动：
+
+```bash
+git pull && docker compose up -d --build
+```
+
 ## 已知边界
 
 - 指纹只作用于 `/v1/chat/completions` 的成功响应（`status < 400`），错误响应与其他接口不改写。
