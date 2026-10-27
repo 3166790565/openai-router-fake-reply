@@ -1,0 +1,15 @@
+services:
+  proxy:
+    build: .
+    container_name: openai-router
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      CONFIG_PATH: /app/data/config.json
+      WEBUI_USER: ""
+      WEBUI_PASS: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped

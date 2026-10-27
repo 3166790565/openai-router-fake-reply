@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenAI 路由</title>
+<style>
+  :root {
+    --bg: #12141a; --card: #1a1d26; --card2: #222633; --line: #2e3444;
+    --text: #e6e9f0; --dim: #8b93a7; --accent: #5b8cff; --ok: #35c98a; --err: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.6 -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 10; background: rgba(18,20,26,.94);
+    backdrop-filter: blur(8px); border-bottom: 1px solid var(--line);
+    padding: 12px 20px; display: flex; align-items: center; gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0 auto 0 0; font-weight: 600; }
+  main { max-width: 980px; margin: 0 auto; padding: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; color: var(--dim); font-weight: 600; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+  label { display: block; font-size: 12px; color: var(--dim); margin-bottom: 4px; }
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    width: 100%; background: var(--card2); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 8px 10px; font: inherit;
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px;
+  }
+  textarea { resize: vertical; min-height: 72px; }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  button {
+    background: var(--card2); color: var(--text); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 14px; cursor: pointer; font: inherit; font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--err); color: var(--err); }
+  button.sm { padding: 4px 9px; font-size: 12px; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .rule { background: var(--card); border: 1px solid var(--line); border-radius: 10px; margin-bottom: 14px; }
+  .rule-head {
+    display: flex; gap: 10px; align-items: center; padding: 12px 16px;
+    border-bottom: 1px solid var(--line); cursor: pointer;
+  }
+  .rule-head .title { flex: 1; font-weight: 600; }
+  .rule-body { padding: 16px; display: none; }
+  .rule.open .rule-body { display: block; }
+  .fp {
+    margin-top: 16px; border: 1px dashed var(--line); border-radius: 8px; padding: 14px;
+    background: rgba(255,255,255,.015);
+  }
+  .fp h3 { font-size: 13px; margin: 0 0 10px; color: var(--accent); }
+  .hdr-row { display: flex; gap: 8px; margin-bottom: 6px; }
+  .hdr-row input:first-child { flex: 0 0 38%; }
+  .muted { color: var(--dim); font-size: 12px; }
+  .toast {
+    position: fixed; top: 64px; right: 20px; z-index: 50; padding: 10px 16px;
+    border-radius: 8px; background: var(--card2); border: 1px solid var(--line);
+    opacity: 0; transform: translateY(-6px); transition: .2s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: none; }
+  .toast.ok { border-color: var(--ok); }
+  .toast.err { border-color: var(--err); }
+  pre {
+    background: var(--card2); border: 1px solid var(--line); border-radius: 6px;
+    padding: 10px; overflow: auto; max-height: 240px; font-size: 12px; margin: 8px 0 0;
+  }
+  .switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
+  .switch input { width: auto; }
+  details summary { cursor: pointer; color: var(--dim); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>OpenAI 兼容路由</h1>
+  <button onclick="loadConfig()">重载</button>
+  <button onclick="resetConfig()" class="danger">恢复默认</button>
+  <button onclick="saveConfig()" class="primary">保存</button>
+</header>
+<div class="toast" id="toast"></div>
+<main>
+  <div class="card">
+    <h2>上游设置</h2>
+    <div class="grid">
+      <div>
+        <label>上游 Base URL</label>
+        <input type="text" id="upstream_base_url" placeholder="https://api.openai.com/v1">
+      </div>
+      <div>
+        <label>请求超时（秒）</label>
+        <input type="number" id="request_timeout" min="1">
+      </div>
+      <div>
+        <label>采集超时（秒）</label>
+        <input type="number" id="capture_timeout" min="1">
+      </div>
+      <div>
+        <label>假回复块间隔（毫秒）</label>
+        <input type="number" id="chunk_delay_ms" min="0">
+      </div>
+      <div>
+        <label>假回复每块字符数</label>
+        <input type="number" id="chunk_size" min="1">
+      </div>
+    </div>
+  </div>
+
+  <div id="rules"></div>
+  <button onclick="addRule()">+ 添加规则</button>
+
+  <div class="card" style="margin-top:20px">
+    <h2>规则调试</h2>
+    <div class="grid">
+      <div><label>model</label><input type="text" id="dbg_model" value="deepseek-chat"></div>
+      <div><label>消息</label><input type="text" id="dbg_msg" value="你好你是谁"></div>
+    </div>
+    <div class="row" style="margin-top:10px"><button onclick="doMatch()">测试匹配</button></div>
+    <pre id="dbg_out" style="display:none"></pre>
+  </div>
+</main>
+
+<script>
+let CFG = null;
+
+function esc(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function toast(msg, kind) {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast show " + (kind || "");
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.className = "toast " + (kind || ""), 2200);
+}
+
+async function api(url, opts) {
+  const r = await fetch(url, opts);
+  const text = await r.text();
+  let data = null;
+  try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!r.ok) {
+    const msg = (data && data.detail) || (data && data.error && data.error.message) || r.statusText;
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+function lines(v) { return (v || "").split("\n").map(s => s.trim()).filter(Boolean); }
+// 回复文案/思考内容按 "-----" 分隔，条目内可含换行
+function blocks(v) {
+  return (v || "").split(/^\s*-{3,}\s*$/m).map(s => s.trim()).filter(Boolean);
+}
+
+function fpDefaults() {
+  return { enabled: false, apply_fake: true, apply_proxy: true,
+           id: "chatcmpl-{random}", model: "{model}", created: "{timestamp}",
+           system_fingerprint: "", service_tier: "", object: "",
+           usage: null, headers: {}, extra: {} };
+}
+
+async function loadConfig() {
+  try {
+    CFG = await api("/api/config");
+    render();
+  } catch (e) { toast("加载失败: " + e.message, "err"); }
+}
+
+async function saveConfig() {
+  try {
+    CFG = await api("/api/config", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(CFG),
+    });
+    render();
+    toast("已保存", "ok");
+  } catch (e) { toast("保存失败: " + e.message, "err"); }
+}
+
+async function resetConfig() {
+  if (!confirm("恢复默认配置？当前规则会被覆盖。")) return;
+  try {
+    CFG = await api("/api/config/reset", { method: "POST" });
+    render();
+    toast("已恢复默认", "ok");
+  } catch (e) { toast("失败: " + e.message, "err"); }
+}
+
+function addRule() {
+  CFG.rules.push({
+    id: "r-" + Math.random().toString(16).slice(2, 10),
+    name: "新规则", enabled: true, model_match: "", upstream_model: "",
+    keywords: [], replies: ["这是一条测试回复。"], fingerprint: fpDefaults(),
+  });
+  render();
+}
+
+function ruleHtml(r, i) {
+  const fp = r.fingerprint || fpDefaults();
+  const hdrRows = Object.entries(fp.headers || {}).map(([k, v], hi) => `
+    <div class="hdr-row" data-rule="${i}" data-hdr="${hi}">
+      <input type="text" class="hdr-k" value="${esc(k)}" placeholder="header 名">
+      <input type="text" class="hdr-v" value="${esc(v)}" placeholder="值，支持 {random} {ms}">
+      <button class="sm danger" onclick="delHeader(${i}, ${hi})">×</button>
+    </div>`).join("");
+
+  return `
+  <div class="rule ${i === 0 ? "open" : ""}" data-idx="${i}">
+    <div class="rule-head" onclick="toggleRule(${i}, event)">
+      <input type="checkbox" class="r-enabled" ${r.enabled ? "checked" : ""} onclick="event.stopPropagation()">
+      <span class="title">${esc(r.name || "未命名")}</span>
+      <span class="muted">model≈${esc(r.model_match || "*")}</span>
+      <button class="sm" onclick="moveRule(${i}, -1, event)">↑</button>
+      <button class="sm" onclick="moveRule(${i}, 1, event)">↓</button>
+      <button class="sm danger" onclick="delRule(${i}, event)">删除</button>
+    </div>
+    <div class="rule-body">
+      <div class="grid">
+        <div><label>名称</label><input type="text" class="r-name" value="${esc(r.name)}"></div>
+        <div><label>model 匹配（子串，留空=兜底）</label><input type="text" class="r-match" value="${esc(r.model_match)}"></div>
+        <div><label>转发时改写为（留空=保持原样）</label><input type="text" class="r-upmodel" value="${esc(r.upstream_model)}"></div>
+      </div>
+      <div class="grid" style="margin-top:12px">
+        <div>
+          <label>关键词（每行一个）</label>
+          <textarea class="r-keywords" rows="5">${esc((r.keywords || []).join("\n"))}</textarea>
+        </div>
+        <div>
+          <label>回复文案（用 ----- 分隔多条，随机选一条；条目内可换行）</label>
+          <textarea class="r-replies" rows="8">${esc((r.replies || []).join("\n-----\n"))}</textarea>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <label>思考内容 reasoning_content（用 ----- 分隔多条，留空则不返回）</label>
+        <textarea class="r-reasoning" rows="6">${esc((r.reasoning || []).join("\n-----\n"))}</textarea>
+      </div>
+
+      <div class="fp">
+        <h3>模型指纹</h3>
+        <div class="row">
+          <label class="switch"><input type="checkbox" class="fp-enabled" ${fp.enabled ? "checked" : ""}>启用指纹</label>
+          <label class="switch"><input type="checkbox" class="fp-fake" ${fp.apply_fake ? "checked" : ""}>假回复使用</label>
+          <label class="switch"><input type="checkbox" class="fp-proxy" ${fp.apply_proxy ? "checked" : ""}>转发使用</label>
+        </div>
+        <div class="grid" style="margin-top:12px">
+          <div><label>id（模板）</label><input type="text" class="fp-id" value="${esc(fp.id)}"></div>
+          <div><label>model（模板）</label><input type="text" class="fp-model" value="${esc(fp.model)}"></div>
+          <div><label>created（模板）</label><input type="text" class="fp-created" value="${esc(fp.created)}"></div>
+          <div><label>system_fingerprint</label><input type="text" class="fp-sysfp" value="${esc(fp.system_fingerprint)}"></div>
+          <div><label>service_tier</label><input type="text" class="fp-tier" value="${esc(fp.service_tier)}"></div>
+          <div><label>object（留空=自动）</label><input type="text" class="fp-object" value="${esc(fp.object)}"></div>
+        </div>
+        <div style="margin-top:12px">
+          <label>usage（JSON，留空=按实际内容用 tokenizer 精确计算）</label>
+          <textarea class="fp-usage" rows="2" placeholder='留空即可。填了会覆盖所有请求，导致 t/s 异常'>${esc(fp.usage ? JSON.stringify(fp.usage) : "")}</textarea>
+        </div>
+        <div style="margin-top:12px">
+          <label>响应头</label>
+          ${hdrRows}
+          <button class="sm" onclick="addHeader(${i})">+ 添加响应头</button>
+        </div>
+        <div style="margin-top:12px">
+          <label>额外字段 JSON（合并到响应顶层）</label>
+          <textarea class="fp-extra" rows="3" placeholder='{"foo":"bar"}'>${esc(Object.keys(fp.extra || {}).length ? JSON.stringify(fp.extra) : "")}</textarea>
+        </div>
+        <details>
+          <summary>从上游采集指纹</summary>
+          <div class="grid" style="margin-top:10px">
+            <div><label>上游 Base URL</label><input type="text" class="cap-url" placeholder="https://api.deepseek.com/v1"></div>
+            <div><label>API Key（仅本次使用，不保存）</label><input type="password" class="cap-key" autocomplete="off"></div>
+            <div><label>模型名</label><input type="text" class="cap-model" placeholder="deepseek-chat"></div>
+            <div><label>提示词（可选）</label><input type="text" class="cap-prompt" placeholder="hi"></div>
+          </div>
+          <div class="row" style="margin-top:10px">
+            <button class="sm" onclick="capture(${i})">采集并填入</button>
+            <span class="muted">会真实请求一次（max_tokens=1）</span>
+          </div>
+          <pre class="cap-out" style="display:none"></pre>
+        </details>
+      </div>
+    </div>
+  </div>`;
+}
+
+function render() {
+  document.getElementById("upstream_base_url").value = CFG.upstream_base_url;
+  document.getElementById("request_timeout").value = CFG.request_timeout;
+  document.getElementById("capture_timeout").value = CFG.capture_timeout;
+  document.getElementById("chunk_delay_ms").value = CFG.chunk_delay_ms;
+  document.getElementById("chunk_size").value = CFG.chunk_size;
+  document.getElementById("rules").innerHTML = CFG.rules.map(ruleHtml).join("");
+  bindSettings();
+  bindRuleInputs();
+}
+
+function bindSettings() {
+  const on = (id, fn) => {
+    const node = document.getElementById(id);
+    if (!node || node.dataset.bound) return;
+    node.dataset.bound = "1";
+    const apply = () => fn(node.value);
+    node.addEventListener("input", apply);
+    node.addEventListener("change", apply);
+  };
+  on("upstream_base_url", v => CFG.upstream_base_url = v.trim());
+  on("request_timeout", v => CFG.request_timeout = Number(v) || 300);
+  on("capture_timeout", v => CFG.capture_timeout = Number(v) || 30);
+  on("chunk_delay_ms", v => CFG.chunk_delay_ms = Number(v) || 0);
+  on("chunk_size", v => CFG.chunk_size = Math.max(1, Number(v) || 1));
+}
+
+function bindRuleInputs() {
+  document.querySelectorAll(".rule").forEach(el => {
+    const i = +el.dataset.idx;
+    const r = CFG.rules[i];
+    const on = (sel, fn) => {
+      const node = el.querySelector(sel);
+      if (!node) return;
+      node.addEventListener("change", () => { fn(node.value); });
+      node.addEventListener("input", () => { fn(node.value); });
+    };
+    on(".r-name", v => r.name = v);
+    on(".r-match", v => r.model_match = v);
+    on(".r-upmodel", v => r.upstream_model = v);
+    on(".r-keywords", v => r.keywords = lines(v));
+    on(".r-replies", v => r.replies = blocks(v));
+    on(".r-reasoning", v => r.reasoning = blocks(v));
+    el.querySelector(".r-enabled").addEventListener("change", e => r.enabled = e.target.checked);
+
+    const fp = r.fingerprint = r.fingerprint || fpDefaults();
+    el.querySelector(".fp-enabled").addEventListener("change", e => fp.enabled = e.target.checked);
+    el.querySelector(".fp-fake").addEventListener("change", e => fp.apply_fake = e.target.checked);
+    el.querySelector(".fp-proxy").addEventListener("change", e => fp.apply_proxy = e.target.checked);
+    on(".fp-id", v => fp.id = v);
+    on(".fp-model", v => fp.model = v);
+    on(".fp-created", v => fp.created = v);
+    on(".fp-sysfp", v => fp.system_fingerprint = v);
+    on(".fp-tier", v => fp.service_tier = v);
+    on(".fp-object", v => fp.object = v);
+    on(".fp-usage", v => {
+      if (!v.trim()) { fp.usage = null; return; }
+      try { fp.usage = JSON.parse(v); } catch { /* keep last valid */ }
+    });
+    on(".fp-extra", v => {
+      if (!v.trim()) { fp.extra = {}; return; }
+      try { fp.extra = JSON.parse(v); } catch { /* keep last valid */ }
+    });
+
+    el.querySelectorAll(".hdr-row").forEach(row => {
+      const key = row.querySelector(".hdr-k");
+      const val = row.querySelector(".hdr-v");
+      const sync = () => {
+        const oldKey = Object.keys(fp.headers)[+row.dataset.hdr];
+        delete fp.headers[oldKey];
+        if (key.value.trim()) fp.headers[key.value.trim()] = val.value;
+      };
+      key.addEventListener("input", sync);
+      val.addEventListener("input", sync);
+    });
+  });
+}
+
+function toggleRule(i, ev) {
+  const el = ev.currentTarget.parentElement;
+  el.classList.toggle("open");
+}
+
+function delRule(i, ev) {
+  ev.stopPropagation();
+  if (!confirm("删除规则「" + (CFG.rules[i].name || "未命名") + "」？")) return;
+  CFG.rules.splice(i, 1);
+  render();
+}
+
+function moveRule(i, dir, ev) {
+  ev.stopPropagation();
+  const j = i + dir;
+  if (j < 0 || j >= CFG.rules.length) return;
+  const tmp = CFG.rules[i];
+  CFG.rules[i] = CFG.rules[j];
+  CFG.rules[j] = tmp;
+  render();
+}
+
+function addHeader(i) {
+  const fp = CFG.rules[i].fingerprint;
+  fp.headers["x-custom-" + (Object.keys(fp.headers).length + 1)] = "{random}";
+  render();
+}
+
+function delHeader(i, hi) {
+  const fp = CFG.rules[i].fingerprint;
+  delete fp.headers[Object.keys(fp.headers)[hi]];
+  render();
+}
+
+async function capture(i) {
+  const el = document.querySelectorAll(".rule")[i];
+  const btn = el.querySelector(".cap-out");
+  const keyEl = el.querySelector(".cap-key");
+  const payload = {
+    base_url: el.querySelector(".cap-url").value.trim() || CFG.upstream_base_url,
+    api_key: keyEl.value,
+    model: el.querySelector(".cap-model").value.trim(),
+    prompt: el.querySelector(".cap-prompt").value.trim(),
+  };
+  if (!payload.model) { toast("请填写模型名", "err"); return; }
+  try {
+    const res = await api("/api/fingerprint/capture", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    keyEl.value = "";
+    const fp = CFG.rules[i].fingerprint;
+    Object.assign(fp, res.fingerprint);
+    render();
+    const fresh = document.querySelectorAll(".rule")[i];
+    const out = fresh.querySelector(".cap-out");
+    out.style.display = "block";
+    out.textContent =
+      "采集到的实际值:\n" + JSON.stringify(res.captured, null, 2) +
+      "\n\n响应头:\n" + JSON.stringify(res.captured_headers, null, 2) +
+      "\n\n样例:\n" + res.sample;
+    fresh.classList.add("open");
+    toast("指纹已填入，记得保存", "ok");
+  } catch (e) { toast("采集失败: " + e.message, "err"); }
+}
+
+async function doMatch() {
+  try {
+    const res = await api("/api/match", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: document.getElementById("dbg_model").value,
+        message: document.getElementById("dbg_msg").value,
+      }),
+    });
+    const out = document.getElementById("dbg_out");
+    out.style.display = "block";
+    out.textContent = JSON.stringify(res, null, 2);
+  } catch (e) { toast("测试失败: " + e.message, "err"); }
+}
+
+loadConfig();
+</script>
+</body>
+</html>
