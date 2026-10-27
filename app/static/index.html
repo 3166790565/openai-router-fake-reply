@@ -8,6 +8,7 @@
   :root {
     --bg: #12141a; --card: #1a1d26; --card2: #222633; --line: #2e3444;
     --text: #e6e9f0; --dim: #8b93a7; --accent: #5b8cff; --ok: #35c98a; --err: #ff6b6b;
+    --warn: #f0b429;
   }
   * { box-sizing: border-box; }
   body {
@@ -50,15 +51,37 @@
     border-bottom: 1px solid var(--line); cursor: pointer;
   }
   .rule-head .title { flex: 1; font-weight: 600; }
-  .rule-body { padding: 16px; display: none; }
+  .rule-body { padding: 0; display: none; }
   .rule.open .rule-body { display: block; }
-  .fp {
-    margin-top: 16px; border: 1px dashed var(--line); border-radius: 8px; padding: 14px;
-    background: rgba(255,255,255,.015);
+  .section {
+    border-bottom: 1px solid var(--line);
   }
+  .section:last-child { border-bottom: none; }
+  .section-head {
+    display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+    cursor: pointer; user-select: none; font-size: 13px; font-weight: 600;
+    color: var(--dim);
+  }
+  .section-head:hover { color: var(--text); }
+  .section-head .arrow { transition: transform .15s; font-size: 11px; }
+  .section.open .section-head .arrow { transform: rotate(90deg); }
+  .section-head .badge {
+    font-size: 11px; padding: 1px 6px; border-radius: 4px; font-weight: 400;
+  }
+  .section-body { padding: 0 16px 14px; display: none; }
+  .section.open .section-body { display: block; }
+  .badge-on { background: rgba(53,201,138,.15); color: var(--ok); }
+  .badge-off { background: rgba(139,147,167,.15); color: var(--dim); }
+  .badge-warn { background: rgba(240,180,41,.15); color: var(--warn); }
   .fp h3 { font-size: 13px; margin: 0 0 10px; color: var(--accent); }
   .hdr-row { display: flex; gap: 8px; margin-bottom: 6px; }
   .hdr-row input:first-child { flex: 0 0 38%; }
+  .route-row { display: flex; gap: 8px; margin-bottom: 6px; align-items: center; }
+  .route-row input[type=number] { flex: 0 0 70px; }
+  .route-row input[type=text]:nth-child(2) { flex: 1; }
+  .route-row label { flex: 0 0 auto; margin: 0; display: flex; align-items: center; gap: 4px; font-size: 12px; }
+  .route-row input[type=checkbox] { width: auto; }
+  .route-row textarea { flex: 0 0 140px; min-height: 34px; font-size: 12px; padding: 5px 8px; }
   .muted { color: var(--dim); font-size: 12px; }
   .toast {
     position: fixed; top: 64px; right: 20px; z-index: 50; padding: 10px 16px;
@@ -75,6 +98,22 @@
   .switch { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); }
   .switch input { width: auto; }
   details summary { cursor: pointer; color: var(--dim); font-size: 12px; margin-top: 10px; }
+
+  /* 日志页 */
+  .log-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .log-table th, .log-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); }
+  .log-table th { color: var(--dim); font-weight: 600; font-size: 12px; }
+  .log-table tr:hover td { background: rgba(255,255,255,.02); }
+  .log-detail { display: none; padding: 8px 10px; background: var(--card2); border-radius: 6px; margin: 4px 0; font-size: 12px; }
+  .log-detail.open { display: block; }
+  .tag { display: inline-block; padding: 1px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .tag-fake { background: rgba(53,201,138,.15); color: var(--ok); }
+  .tag-first_msg { background: rgba(91,140,255,.15); color: var(--accent); }
+  .tag-route { background: rgba(240,180,41,.15); color: var(--warn); }
+  .tag-proxy { background: rgba(139,147,167,.15); color: var(--dim); }
+  .pager { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
+  .pager button { padding: 4px 10px; font-size: 12px; }
+  .pager .cur { background: var(--accent); color: #fff; border-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -109,6 +148,13 @@
         <label>假回复每块字符数</label>
         <input type="number" id="chunk_size" min="1">
       </div>
+      <div>
+        <label>日志保留天数</label>
+        <input type="number" id="log_retention_days" min="0">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <label class="switch"><input type="checkbox" id="log_enabled">启用请求日志</label>
     </div>
   </div>
 
@@ -124,10 +170,30 @@
     <div class="row" style="margin-top:10px"><button onclick="doMatch()">测试匹配</button></div>
     <pre id="dbg_out" style="display:none"></pre>
   </div>
+
+  <div class="card" style="margin-top:20px">
+    <h2>请求日志</h2>
+    <div class="row" style="margin-bottom:10px">
+      <select id="log_branch" style="width:auto">
+        <option value="">全部分支</option>
+        <option value="fake">假回复</option>
+        <option value="first_msg">首条加速</option>
+        <option value="route">掺水</option>
+        <option value="proxy">转发</option>
+      </select>
+      <input type="text" id="log_date" placeholder="日期 YYYY-MM-DD" style="width:140px">
+      <button class="sm" onclick="loadLogs(1)">查询</button>
+      <button class="sm danger" onclick="clearLogs()">清空日志</button>
+      <span class="muted" id="log_count"></span>
+    </div>
+    <div id="log_table_wrap"></div>
+    <div class="pager" id="log_pager"></div>
+  </div>
 </main>
 
 <script>
 let CFG = null;
+let LOG_PAGE = 1;
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -154,7 +220,6 @@ async function api(url, opts) {
 }
 
 function lines(v) { return (v || "").split("\n").map(s => s.trim()).filter(Boolean); }
-// 回复文案/思考内容按 "-----" 分隔，条目内可含换行
 function blocks(v) {
   return (v || "").split(/^\s*-{3,}\s*$/m).map(s => s.trim()).filter(Boolean);
 }
@@ -166,10 +231,20 @@ function fpDefaults() {
            usage: null, headers: {}, extra: {} };
 }
 
+function routeDefaults() {
+  return { weight: 1, upstream_model: "", supports_multimodal: true, body_override: {} };
+}
+
+function fmDefaults() {
+  return { enabled: false, detect_ua: ["claude-cli", "codex"],
+           detect_system: ["You are Claude Code"], max_user_len: 20, fixed_model: "" };
+}
+
 async function loadConfig() {
   try {
     CFG = await api("/api/config");
     render();
+    loadLogs(1);
   } catch (e) { toast("加载失败: " + e.message, "err"); }
 }
 
@@ -197,19 +272,164 @@ function addRule() {
   CFG.rules.push({
     id: "r-" + Math.random().toString(16).slice(2, 10),
     name: "新规则", enabled: true, model_match: "", upstream_model: "",
-    keywords: [], replies: ["这是一条测试回复。"], fingerprint: fpDefaults(),
+    keywords: [], replies: ["这是一条测试回复。"],
+    reasoning: [], patterns: [],
+    routes: [], first_msg: fmDefaults(),
+    match_max_length: 40, match_head_chars: 15,
+    work_override: ["代码","翻译","帮我写","润色","分析","解释","计算","角色","小说","文章"," debug ","函数"],
+    fingerprint: fpDefaults(),
   });
   render();
 }
 
+// ---- 折叠区块 ----
+function toggleSection(head) {
+  head.parentElement.classList.toggle("open");
+}
+
+function sectionHtml(id, title, badge, open, bodyHtml) {
+  return `
+  <div class="section ${open ? 'open' : ''}" id="${id}">
+    <div class="section-head" onclick="toggleSection(this)">
+      <span class="arrow">▶</span>
+      <span>${title}</span>
+      ${badge || ''}
+    </div>
+    <div class="section-body">${bodyHtml}</div>
+  </div>`;
+}
+
+// ---- 掺水候选表 ----
+function routesHtml(r, i) {
+  const routes = r.routes || [];
+  const rows = routes.map((rt, ri) => `
+    <div class="route-row" data-rule="${i}" data-route="${ri}">
+      <input type="number" class="rt-weight" value="${rt.weight}" min="0" placeholder="权重">
+      <input type="text" class="rt-model" value="${esc(rt.upstream_model)}" placeholder="目标模型，空=保持原样">
+      <label><input type="checkbox" class="rt-mm" ${rt.supports_multimodal ? "checked" : ""}>多模态</label>
+      <textarea class="rt-override" placeholder='body覆盖JSON'>${esc(Object.keys(rt.body_override||{}).length ? JSON.stringify(rt.body_override) : "")}</textarea>
+      <button class="sm danger" onclick="delRoute(${i}, ${ri})">×</button>
+    </div>`).join("");
+  return rows + `<button class="sm" onclick="addRoute(${i})" style="margin-top:4px">+ 添加候选</button>`;
+}
+
+// ---- 规则卡片 ----
 function ruleHtml(r, i) {
   const fp = r.fingerprint || fpDefaults();
+  const fm = r.first_msg || fmDefaults();
   const hdrRows = Object.entries(fp.headers || {}).map(([k, v], hi) => `
     <div class="hdr-row" data-rule="${i}" data-hdr="${hi}">
       <input type="text" class="hdr-k" value="${esc(k)}" placeholder="header 名">
       <input type="text" class="hdr-v" value="${esc(v)}" placeholder="值，支持 {random} {ms}">
       <button class="sm danger" onclick="delHeader(${i}, ${hi})">×</button>
     </div>`).join("");
+
+  const basicBody = `
+    <div class="grid">
+      <div><label>名称</label><input type="text" class="r-name" value="${esc(r.name)}"></div>
+      <div><label>model 匹配（子串，留空=兜底）</label><input type="text" class="r-match" value="${esc(r.model_match)}"></div>
+      <div><label>转发时改写为（无掺水候选时生效）</label><input type="text" class="r-upmodel" value="${esc(r.upstream_model)}"></div>
+    </div>`;
+
+  const fakeBody = `
+    <div class="grid">
+      <div>
+        <label>关键词（每行一个）</label>
+        <textarea class="r-keywords" rows="4">${esc((r.keywords || []).join("\n"))}</textarea>
+      </div>
+      <div>
+        <label>正则整句模板（每行一个，优先于关键词）</label>
+        <textarea class="r-patterns" rows="4" placeholder="^你是谁[？?]?$">${esc((r.patterns || []).join("\n"))}</textarea>
+      </div>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div><label>消息最大长度（超过不造假）</label><input type="number" class="r-maxlen" value="${r.match_max_length ?? 40}" min="1"></div>
+      <div><label>句首范围（关键词须在前 N 字内）</label><input type="number" class="r-headchars" value="${r.match_head_chars ?? 15}" min="1"></div>
+    </div>
+    <div style="margin-top:10px">
+      <label>工作词黑名单（每行一个，命中强制走上游）</label>
+      <textarea class="r-workoverride" rows="3">${esc((r.work_override || []).join("\n"))}</textarea>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div>
+        <label>回复文案（用 ----- 分隔多条，随机选一条；条目内可换行）</label>
+        <textarea class="r-replies" rows="6">${esc((r.replies || []).join("\n-----\n"))}</textarea>
+      </div>
+      <div>
+        <label>思考内容 reasoning_content（用 ----- 分隔多条，留空则不返回）</label>
+        <textarea class="r-reasoning" rows="6">${esc((r.reasoning || []).join("\n-----\n"))}</textarea>
+      </div>
+    </div>`;
+
+  const routeCount = (r.routes || []).length;
+  const routeBadge = routeCount ? `<span class="badge badge-on">${routeCount} 条候选</span>` : '';
+  const routeBody = `
+    ${routesHtml(r, i)}
+    <div class="muted" style="margin-top:6px">权重为相对值，自动归一化。空目标模型 = 保持客户端原模型（不掺水档）。多模态请求会跳过不支持多模态的候选。body 覆盖用于需要固定参数的模型（如 Kimi K2）。</div>`;
+
+  const fmBadge = fm.enabled ? `<span class="badge badge-on">已启用</span>` : `<span class="badge badge-off">未启用</span>`;
+  const fmBody = `
+    <div class="row">
+      <label class="switch"><input type="checkbox" class="fm-enabled" ${fm.enabled ? "checked" : ""}>启用首条加速</label>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div><label>固定模型（空 = 不启用）</label><input type="text" class="fm-model" value="${esc(fm.fixed_model)}" placeholder="deepseek-v4.1-flash"></div>
+      <div><label>user 消息最大长度</label><input type="number" class="fm-maxlen" value="${fm.max_user_len ?? 20}" min="1"></div>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div>
+        <label>UA 识别（每行一个子串）</label>
+        <textarea class="fm-ua" rows="2">${esc((fm.detect_ua || []).join("\n"))}</textarea>
+      </div>
+      <div>
+        <label>system prompt 识别（每行一个子串）</label>
+        <textarea class="fm-sys" rows="2">${esc((fm.detect_system || []).join("\n"))}</textarea>
+      </div>
+    </div>
+    <div class="muted" style="margin-top:6px">检测到 Agent 工具（Claude Code / Codex 等）的首条短消息时，用固定模型转发，不参与掺水抽签。命中假回复关键词时仍走假回复。</div>`;
+
+  const fpBadge = fp.enabled ? `<span class="badge badge-on">已启用</span>` : `<span class="badge badge-off">未启用</span>`;
+  const fpBody = `
+    <div class="row">
+      <label class="switch"><input type="checkbox" class="fp-enabled" ${fp.enabled ? "checked" : ""}>启用指纹</label>
+      <label class="switch"><input type="checkbox" class="fp-fake" ${fp.apply_fake ? "checked" : ""}>假回复使用</label>
+      <label class="switch"><input type="checkbox" class="fp-proxy" ${fp.apply_proxy ? "checked" : ""}>转发使用</label>
+    </div>
+    <div class="grid" style="margin-top:12px">
+      <div><label>id（模板）</label><input type="text" class="fp-id" value="${esc(fp.id)}"></div>
+      <div><label>model（模板）</label><input type="text" class="fp-model" value="${esc(fp.model)}"></div>
+      <div><label>created（模板）</label><input type="text" class="fp-created" value="${esc(fp.created)}"></div>
+      <div><label>system_fingerprint</label><input type="text" class="fp-sysfp" value="${esc(fp.system_fingerprint)}"></div>
+      <div><label>service_tier</label><input type="text" class="fp-tier" value="${esc(fp.service_tier)}"></div>
+      <div><label>object（留空=自动）</label><input type="text" class="fp-object" value="${esc(fp.object)}"></div>
+    </div>
+    <div style="margin-top:12px">
+      <label>usage（JSON，留空=按实际内容用 tokenizer 精确计算）</label>
+      <textarea class="fp-usage" rows="2" placeholder='留空即可。填了会覆盖所有请求，导致 t/s 异常'>${esc(fp.usage ? JSON.stringify(fp.usage) : "")}</textarea>
+    </div>
+    <div style="margin-top:12px">
+      <label>响应头</label>
+      ${hdrRows}
+      <button class="sm" onclick="addHeader(${i})">+ 添加响应头</button>
+    </div>
+    <div style="margin-top:12px">
+      <label>额外字段 JSON（合并到响应顶层）</label>
+      <textarea class="fp-extra" rows="3" placeholder='{"foo":"bar"}'>${esc(Object.keys(fp.extra || {}).length ? JSON.stringify(fp.extra) : "")}</textarea>
+    </div>
+    <details>
+      <summary>从上游采集指纹</summary>
+      <div class="grid" style="margin-top:10px">
+        <div><label>上游 Base URL</label><input type="text" class="cap-url" placeholder="https://api.deepseek.com/v1"></div>
+        <div><label>API Key（仅本次使用，不保存）</label><input type="password" class="cap-key" autocomplete="off"></div>
+        <div><label>模型名</label><input type="text" class="cap-model" placeholder="deepseek-chat"></div>
+        <div><label>提示词（可选）</label><input type="text" class="cap-prompt" placeholder="hi"></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="sm" onclick="capture(${i})">采集并填入</button>
+        <span class="muted">会真实请求一次（max_tokens=1）</span>
+      </div>
+      <pre class="cap-out" style="display:none"></pre>
+    </details>`;
 
   return `
   <div class="rule ${i === 0 ? "open" : ""}" data-idx="${i}">
@@ -222,69 +442,11 @@ function ruleHtml(r, i) {
       <button class="sm danger" onclick="delRule(${i}, event)">删除</button>
     </div>
     <div class="rule-body">
-      <div class="grid">
-        <div><label>名称</label><input type="text" class="r-name" value="${esc(r.name)}"></div>
-        <div><label>model 匹配（子串，留空=兜底）</label><input type="text" class="r-match" value="${esc(r.model_match)}"></div>
-        <div><label>转发时改写为（留空=保持原样）</label><input type="text" class="r-upmodel" value="${esc(r.upstream_model)}"></div>
-      </div>
-      <div class="grid" style="margin-top:12px">
-        <div>
-          <label>关键词（每行一个）</label>
-          <textarea class="r-keywords" rows="5">${esc((r.keywords || []).join("\n"))}</textarea>
-        </div>
-        <div>
-          <label>回复文案（用 ----- 分隔多条，随机选一条；条目内可换行）</label>
-          <textarea class="r-replies" rows="8">${esc((r.replies || []).join("\n-----\n"))}</textarea>
-        </div>
-      </div>
-      <div style="margin-top:12px">
-        <label>思考内容 reasoning_content（用 ----- 分隔多条，留空则不返回）</label>
-        <textarea class="r-reasoning" rows="6">${esc((r.reasoning || []).join("\n-----\n"))}</textarea>
-      </div>
-
-      <div class="fp">
-        <h3>模型指纹</h3>
-        <div class="row">
-          <label class="switch"><input type="checkbox" class="fp-enabled" ${fp.enabled ? "checked" : ""}>启用指纹</label>
-          <label class="switch"><input type="checkbox" class="fp-fake" ${fp.apply_fake ? "checked" : ""}>假回复使用</label>
-          <label class="switch"><input type="checkbox" class="fp-proxy" ${fp.apply_proxy ? "checked" : ""}>转发使用</label>
-        </div>
-        <div class="grid" style="margin-top:12px">
-          <div><label>id（模板）</label><input type="text" class="fp-id" value="${esc(fp.id)}"></div>
-          <div><label>model（模板）</label><input type="text" class="fp-model" value="${esc(fp.model)}"></div>
-          <div><label>created（模板）</label><input type="text" class="fp-created" value="${esc(fp.created)}"></div>
-          <div><label>system_fingerprint</label><input type="text" class="fp-sysfp" value="${esc(fp.system_fingerprint)}"></div>
-          <div><label>service_tier</label><input type="text" class="fp-tier" value="${esc(fp.service_tier)}"></div>
-          <div><label>object（留空=自动）</label><input type="text" class="fp-object" value="${esc(fp.object)}"></div>
-        </div>
-        <div style="margin-top:12px">
-          <label>usage（JSON，留空=按实际内容用 tokenizer 精确计算）</label>
-          <textarea class="fp-usage" rows="2" placeholder='留空即可。填了会覆盖所有请求，导致 t/s 异常'>${esc(fp.usage ? JSON.stringify(fp.usage) : "")}</textarea>
-        </div>
-        <div style="margin-top:12px">
-          <label>响应头</label>
-          ${hdrRows}
-          <button class="sm" onclick="addHeader(${i})">+ 添加响应头</button>
-        </div>
-        <div style="margin-top:12px">
-          <label>额外字段 JSON（合并到响应顶层）</label>
-          <textarea class="fp-extra" rows="3" placeholder='{"foo":"bar"}'>${esc(Object.keys(fp.extra || {}).length ? JSON.stringify(fp.extra) : "")}</textarea>
-        </div>
-        <details>
-          <summary>从上游采集指纹</summary>
-          <div class="grid" style="margin-top:10px">
-            <div><label>上游 Base URL</label><input type="text" class="cap-url" placeholder="https://api.deepseek.com/v1"></div>
-            <div><label>API Key（仅本次使用，不保存）</label><input type="password" class="cap-key" autocomplete="off"></div>
-            <div><label>模型名</label><input type="text" class="cap-model" placeholder="deepseek-chat"></div>
-            <div><label>提示词（可选）</label><input type="text" class="cap-prompt" placeholder="hi"></div>
-          </div>
-          <div class="row" style="margin-top:10px">
-            <button class="sm" onclick="capture(${i})">采集并填入</button>
-            <span class="muted">会真实请求一次（max_tokens=1）</span>
-          </div>
-          <pre class="cap-out" style="display:none"></pre>
-        </details>
-      </div>
+      ${sectionHtml("sec-basic-" + i, "基础匹配", "", true, basicBody)}
+      ${sectionHtml("sec-fake-" + i, "假回复", "", false, fakeBody)}
+      ${sectionHtml("sec-route-" + i, "掺水路由", routeBadge, false, routeBody)}
+      ${sectionHtml("sec-fm-" + i, "Agent 首条加速", fmBadge, false, fmBody)}
+      ${sectionHtml("sec-fp-" + i, "模型指纹", fpBadge, false, fpBody)}
     </div>
   </div>`;
 }
@@ -295,6 +457,8 @@ function render() {
   document.getElementById("capture_timeout").value = CFG.capture_timeout;
   document.getElementById("chunk_delay_ms").value = CFG.chunk_delay_ms;
   document.getElementById("chunk_size").value = CFG.chunk_size;
+  document.getElementById("log_enabled").checked = CFG.log_enabled !== false;
+  document.getElementById("log_retention_days").value = CFG.log_retention_days ?? 7;
   document.getElementById("rules").innerHTML = CFG.rules.map(ruleHtml).join("");
   bindSettings();
   bindRuleInputs();
@@ -314,6 +478,8 @@ function bindSettings() {
   on("capture_timeout", v => CFG.capture_timeout = Number(v) || 30);
   on("chunk_delay_ms", v => CFG.chunk_delay_ms = Number(v) || 0);
   on("chunk_size", v => CFG.chunk_size = Math.max(1, Number(v) || 1));
+  on("log_retention_days", v => CFG.log_retention_days = Math.max(0, Number(v) || 7));
+  document.getElementById("log_enabled").addEventListener("change", e => CFG.log_enabled = e.target.checked);
 }
 
 function bindRuleInputs() {
@@ -330,10 +496,39 @@ function bindRuleInputs() {
     on(".r-match", v => r.model_match = v);
     on(".r-upmodel", v => r.upstream_model = v);
     on(".r-keywords", v => r.keywords = lines(v));
+    on(".r-patterns", v => r.patterns = lines(v));
+    on(".r-maxlen", v => r.match_max_length = Math.max(1, Number(v) || 40));
+    on(".r-headchars", v => r.match_head_chars = Math.max(1, Number(v) || 15));
+    on(".r-workoverride", v => r.work_override = lines(v));
     on(".r-replies", v => r.replies = blocks(v));
     on(".r-reasoning", v => r.reasoning = blocks(v));
     el.querySelector(".r-enabled").addEventListener("change", e => r.enabled = e.target.checked);
 
+    // 掺水候选
+    r.routes = r.routes || [];
+    el.querySelectorAll(".route-row").forEach(row => {
+      const ri = +row.dataset.route;
+      const rt = r.routes[ri];
+      if (!rt) return;
+      row.querySelector(".rt-weight").addEventListener("input", e => rt.weight = Math.max(0, Number(e.target.value) || 0));
+      row.querySelector(".rt-model").addEventListener("input", e => rt.upstream_model = e.target.value.trim());
+      row.querySelector(".rt-mm").addEventListener("change", e => rt.supports_multimodal = e.target.checked);
+      row.querySelector(".rt-override").addEventListener("input", e => {
+        const v = e.target.value.trim();
+        if (!v) { rt.body_override = {}; return; }
+        try { rt.body_override = JSON.parse(v); } catch { /* keep last valid */ }
+      });
+    });
+
+    // 首条加速
+    const fm = r.first_msg = r.first_msg || fmDefaults();
+    el.querySelector(".fm-enabled").addEventListener("change", e => fm.enabled = e.target.checked);
+    on(".fm-model", v => fm.fixed_model = v.trim());
+    on(".fm-maxlen", v => fm.max_user_len = Math.max(1, Number(v) || 20));
+    on(".fm-ua", v => fm.detect_ua = lines(v));
+    on(".fm-sys", v => fm.detect_system = lines(v));
+
+    // 指纹
     const fp = r.fingerprint = r.fingerprint || fpDefaults();
     el.querySelector(".fp-enabled").addEventListener("change", e => fp.enabled = e.target.checked);
     el.querySelector(".fp-fake").addEventListener("change", e => fp.apply_fake = e.target.checked);
@@ -386,6 +581,17 @@ function moveRule(i, dir, ev) {
   const tmp = CFG.rules[i];
   CFG.rules[i] = CFG.rules[j];
   CFG.rules[j] = tmp;
+  render();
+}
+
+function addRoute(i) {
+  CFG.rules[i].routes = CFG.rules[i].routes || [];
+  CFG.rules[i].routes.push(routeDefaults());
+  render();
+}
+
+function delRoute(i, ri) {
+  CFG.rules[i].routes.splice(ri, 1);
   render();
 }
 
@@ -446,6 +652,90 @@ async function doMatch() {
     out.style.display = "block";
     out.textContent = JSON.stringify(res, null, 2);
   } catch (e) { toast("测试失败: " + e.message, "err"); }
+}
+
+// ---- 日志 ----
+
+async function loadLogs(page) {
+  LOG_PAGE = page || LOG_PAGE;
+  const branch = document.getElementById("log_branch").value;
+  const date = document.getElementById("log_date").value.trim();
+  try {
+    const params = new URLSearchParams({ page: LOG_PAGE, size: 50 });
+    if (branch) params.set("branch", branch);
+    if (date) params.set("date", date);
+    const res = await api("/api/logs?" + params);
+    document.getElementById("log_count").textContent = "共 " + res.total + " 条";
+    renderLogTable(res.items);
+    renderLogPager(res.total, res.page, res.size);
+  } catch (e) { toast("日志加载失败: " + e.message, "err"); }
+}
+
+function renderLogTable(items) {
+  const wrap = document.getElementById("log_table_wrap");
+  if (!items.length) {
+    wrap.innerHTML = '<div class="muted" style="padding:12px">暂无日志</div>';
+    return;
+  }
+  const branchLabels = { fake: "假回复", first_msg: "首条加速", route: "掺水", proxy: "转发" };
+  let html = '<table class="log-table"><tr><th>时间</th><th>model</th><th>分支</th><th>规则</th><th>上游模型</th><th>耗时</th><th>状态</th></tr>';
+  items.forEach((it, idx) => {
+    const d = new Date(it.ts * 1000);
+    const timeStr = d.toLocaleTimeString("zh-CN", { hour12: false });
+    const dateStr = (d.getMonth() + 1) + "/" + d.getDate();
+    const branch = it.branch || "proxy";
+    const tag = '<span class="tag tag-' + branch + '">' + (branchLabels[branch] || branch) + '</span>';
+    html += '<tr onclick="toggleLogDetail(' + idx + ')" style="cursor:pointer">';
+    html += '<td>' + dateStr + ' ' + timeStr + '</td>';
+    html += '<td>' + esc(it.model || "") + '</td>';
+    html += '<td>' + tag + '</td>';
+    html += '<td>' + esc(it.rule_name || it.rule_id || "") + '</td>';
+    html += '<td>' + esc(it.upstream_model || "") + '</td>';
+    html += '<td>' + (it.duration_ms ?? "") + 'ms</td>';
+    html += '<td>' + (it.status ?? "") + '</td>';
+    html += '</tr>';
+    html += '<tr><td colspan="7"><div class="log-detail" id="log-detail-' + idx + '">';
+    if (it.user_msg_snippet) html += '<div><strong>用户消息:</strong> ' + esc(it.user_msg_snippet) + '</div>';
+    if (it.fake_reply_snippet) html += '<div><strong>假回复:</strong> ' + esc(it.fake_reply_snippet) + '</div>';
+    if (it.fake_via) html += '<div><strong>命中方式:</strong> ' + esc(it.fake_via) + '</div>';
+    if (it.first_msg_model) html += '<div><strong>首条加速模型:</strong> ' + esc(it.first_msg_model) + '</div>';
+    if (it.route_picked) html += '<div><strong>掺水选中:</strong> ' + esc(it.route_picked) + ' (权重 ' + (it.route_weight ?? "") + ')</div>';
+    if (it.route_multimodal_excluded && it.route_multimodal_excluded.length)
+      html += '<div><strong>多模态排除:</strong> ' + esc(it.route_multimodal_excluded.join(", ")) + '</div>';
+    if (it.has_multimodal) html += '<div><strong>含多模态:</strong> 是</div>';
+    if (it.prompt_tokens != null) html += '<div><strong>tokens:</strong> prompt=' + it.prompt_tokens + ' completion=' + (it.completion_tokens ?? "?") + '</div>';
+    html += '</div></td></tr>';
+  });
+  html += '</table>';
+  wrap.innerHTML = html;
+}
+
+function toggleLogDetail(idx) {
+  document.getElementById("log-detail-" + idx).classList.toggle("open");
+}
+
+function renderLogPager(total, page, size) {
+  const pages = Math.ceil(total / size);
+  const wrap = document.getElementById("log_pager");
+  if (pages <= 1) { wrap.innerHTML = ""; return; }
+  let html = "";
+  const start = Math.max(1, page - 3);
+  const end = Math.min(pages, page + 3);
+  if (page > 1) html += '<button onclick="loadLogs(' + (page - 1) + ')">◀</button>';
+  for (let p = start; p <= end; p++) {
+    html += '<button class="' + (p === page ? "cur" : "") + '" onclick="loadLogs(' + p + ')">' + p + '</button>';
+  }
+  if (page < pages) html += '<button onclick="loadLogs(' + (page + 1) + ')">▶</button>';
+  wrap.innerHTML = html;
+}
+
+async function clearLogs() {
+  if (!confirm("清空所有请求日志？")) return;
+  try {
+    const res = await api("/api/logs/clear", { method: "POST" });
+    toast("已清空 " + res.cleared + " 个日志文件", "ok");
+    loadLogs(1);
+  } catch (e) { toast("清空失败: " + e.message, "err"); }
 }
 
 loadConfig();

@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import os
+import random
 import re
 import secrets
 import time
@@ -14,12 +15,17 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
-from . import config, fingerprint, tokenizer
-from .config import Rule, Settings
+from . import config, fingerprint, request_log, tokenizer
+from .config import FirstMsgBoost, Route, Rule, Settings
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(title="OpenAI 兼容路由", docs_url=None, redoc_url=None)
+
+
+@app.on_event("startup")
+async def _startup():
+    request_log.start_cleanup_task()
 
 
 # ---------------------------------------------------------------- auth
@@ -112,26 +118,109 @@ def last_user_text(messages: Any) -> str:
     return ""
 
 
-def hit_keyword(text: str, rule: Rule) -> bool:
-    t = (text or "").lower()
-    return any(k.strip() and k.strip().lower() in t for k in rule.keywords)
+def hit_keyword(text: str, rule: Rule) -> tuple[bool, str]:
+    """判断消息是否命中假回复。返回 (是否命中, 命中方式)。
+
+    命中方式: "pattern" | "keyword" | ""（未命中）
+    三重闸门：长度 → 工作词黑名单 → 句首位置。
+    """
+    t = (text or "").strip()
+    if not t or len(t) > rule.match_max_length:
+        return False, ""
+    # 正则整句模板优先
+    for pat in rule.patterns:
+        try:
+            if re.search(pat, t, re.IGNORECASE):
+                return True, "pattern"
+        except re.error:
+            continue
+    # 工作词黑名单：命中任一 → 强制走上游
+    tl = t.lower()
+    if any(w.strip() and w.lower() in tl for w in rule.work_override):
+        return False, "work_override"
+    # 关键词：限制在句首前 N 字内
+    head = tl[: rule.match_head_chars]
+    if any(k.strip() and k.strip().lower() in head for k in rule.keywords):
+        return True, "keyword"
+    return False, ""
+
+
+def _has_multimodal(messages: Any) -> bool:
+    """检测请求是否含图片/多模态内容。"""
+    if not isinstance(messages, list):
+        return False
+    for msg in messages:
+        if not isinstance(msg, dict):
+            continue
+        content = msg.get("content")
+        if isinstance(content, list):
+            for part in content:
+                if isinstance(part, dict) and part.get("type") != "text":
+                    return True
+    return False
+
+
+def _is_agent_first_msg(request: Request, body: dict, fm: FirstMsgBoost) -> bool:
+    """检测是否为 Agent 工具的首条预热消息。"""
+    if not fm.enabled or not fm.fixed_model:
+        return False
+    # UA 识别
+    ua = (request.headers.get("user-agent") or "").lower()
+    ua_hit = any(s.strip() and s.lower() in ua for s in fm.detect_ua)
+    # system prompt 识别
+    msgs = body.get("messages") or []
+    sys_text = ""
+    for m in msgs:
+        if isinstance(m, dict) and m.get("role") == "system":
+            c = m.get("content")
+            sys_text = c if isinstance(c, str) else ""
+            break
+    sys_hit = any(s.strip() and s in sys_text for s in fm.detect_system)
+    # 首条 + 短消息判定
+    user_msgs = [m for m in msgs if isinstance(m, dict) and m.get("role") == "user"]
+    if len(user_msgs) != 1:
+        return False
+    user_text = last_user_text(msgs)
+    if len(user_text) > fm.max_user_len:
+        return False
+    return ua_hit or sys_hit
+
+
+def _pick_route(rule: Rule, client_model: str, has_multimodal: bool) -> tuple[Route, list[str]]:
+    """按权重抽一条掺水候选。返回 (选中候选, 因多模态被排除的模型列表)。"""
+    routes = [r for r in rule.routes if r.weight > 0]
+    if not routes:
+        return Route(weight=1, upstream_model=rule.upstream_model), []
+    excluded: list[str] = []
+    if has_multimodal:
+        compat = [r for r in routes if r.supports_multimodal]
+        excluded = [r.upstream_model for r in routes if not r.supports_multimodal and r.upstream_model]
+        routes = compat if compat else [Route(weight=1, upstream_model=client_model)]
+    picked = random.choices(routes, weights=[r.weight for r in routes], k=1)[0]
+    return picked, excluded
 
 
 def decide(model: str, message: str, settings: Settings) -> dict:
     rule = pick_rule(model, settings)
     if rule is None:
         return {"rule": None, "branch": "proxy", "reply": None, "fingerprint": False}
-    hit = hit_keyword(message, rule)
+    hit, hit_via = hit_keyword(message, rule)
     fp_on = rule.fingerprint.enabled and (
         rule.fingerprint.apply_fake if hit else rule.fingerprint.apply_proxy
     )
-    return {
+    result = {
         "rule": {"id": rule.id, "name": rule.name},
         "branch": "fake" if hit else "proxy",
         "reply": None if not hit else _pick_reply(rule),
         "fingerprint": bool(fp_on),
         "upstream_model": None if hit else (rule.upstream_model or None),
+        "hit_via": hit_via,
     }
+    if rule.routes:
+        result["routes"] = [r.model_dump() for r in rule.routes]
+    if rule.first_msg.enabled:
+        result["first_msg"] = {"enabled": True, "fixed_model": rule.first_msg.fixed_model}
+    return result
 
 
 def _pick_reply(rule: Rule) -> str:
@@ -169,6 +258,30 @@ async def capture(payload: dict):
         )
     except fingerprint.CaptureError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+# ---------------------------------------------------------------- request logs
+
+@app.get("/api/logs")
+async def get_logs(
+    date: str = "",
+    branch: str = "",
+    rule: str = "",
+    page: int = 1,
+    size: int = 50,
+):
+    return await request_log.read(date=date, branch=branch, rule=rule, page=page, size=size)
+
+
+@app.get("/api/logs/dates")
+async def get_log_dates():
+    return {"dates": await request_log.list_dates()}
+
+
+@app.post("/api/logs/clear")
+async def clear_logs():
+    count = await request_log.clear_all()
+    return {"cleared": count}
 
 
 # ---------------------------------------------------------------- helpers
@@ -442,6 +555,7 @@ async def _proxy(
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
 async def chat_completions(request: Request):
+    t0 = time.time()
     raw = await request.body()
     settings = config.get()
     try:
@@ -452,14 +566,77 @@ async def chat_completions(request: Request):
         return await _proxy(request, "chat/completions", raw, None, "")
 
     client_model = str(body.get("model") or "")
+    user_text = last_user_text(body.get("messages"))
+    has_mm = _has_multimodal(body.get("messages"))
+    is_stream = bool(body.get("stream"))
     rule = pick_rule(client_model, settings)
+
+    # 日志基础字段
+    log_entry: dict[str, Any] = {
+        "model": client_model,
+        "user_msg_snippet": user_text,
+        "has_multimodal": has_mm,
+        "stream": is_stream,
+    }
+
     if rule is not None:
-        if hit_keyword(last_user_text(body.get("messages")), rule):
-            return _fake_reply(request, body, rule, client_model)
-        if rule.upstream_model:
-            body["model"] = rule.upstream_model
+        log_entry["rule_id"] = rule.id
+        log_entry["rule_name"] = rule.name
+
+        # 1. 假回复分支
+        hit, hit_via = hit_keyword(user_text, rule)
+        if hit:
+            log_entry["branch"] = "fake"
+            log_entry["fake_hit"] = True
+            log_entry["fake_via"] = hit_via
+            reply_text = _pick_reply(rule)
+            log_entry["fake_reply_snippet"] = reply_text
+            resp = _fake_reply(request, body, rule, client_model)
+            log_entry["status"] = resp.status_code
+            log_entry["duration_ms"] = int((time.time() - t0) * 1000)
+            asyncio.create_task(request_log.write(log_entry))
+            return resp
+
+        # 2. Agent 首条加速分支
+        if _is_agent_first_msg(request, body, rule.first_msg):
+            log_entry["branch"] = "first_msg"
+            log_entry["first_msg_boost"] = True
+            log_entry["first_msg_model"] = rule.first_msg.fixed_model
+            body["model"] = rule.first_msg.fixed_model
             raw = json.dumps(body, ensure_ascii=False).encode()
-    return await _proxy(request, "chat/completions", raw, rule, client_model)
+            log_entry["upstream_model"] = rule.first_msg.fixed_model
+            resp = await _proxy(request, "chat/completions", raw, rule, client_model)
+            log_entry["status"] = resp.status_code
+            log_entry["duration_ms"] = int((time.time() - t0) * 1000)
+            asyncio.create_task(request_log.write(log_entry))
+            return resp
+
+        # 3. 掺水路由分支
+        route, mm_excluded = _pick_route(rule, client_model, has_mm)
+        if route.upstream_model and route.upstream_model != client_model:
+            log_entry["branch"] = "route"
+            log_entry["route_picked"] = route.upstream_model
+            log_entry["route_weight"] = route.weight
+            if mm_excluded:
+                log_entry["route_multimodal_excluded"] = mm_excluded
+            body["model"] = route.upstream_model
+        else:
+            log_entry["branch"] = "proxy"
+            log_entry["route_picked"] = ""
+        if route.body_override:
+            body.update(route.body_override)
+        if route.upstream_model or route.body_override:
+            raw = json.dumps(body, ensure_ascii=False).encode()
+        log_entry["upstream_model"] = body.get("model", client_model)
+    else:
+        log_entry["branch"] = "proxy"
+        log_entry["upstream_model"] = client_model
+
+    resp = await _proxy(request, "chat/completions", raw, rule, client_model)
+    log_entry["status"] = resp.status_code
+    log_entry["duration_ms"] = int((time.time() - t0) * 1000)
+    asyncio.create_task(request_log.write(log_entry))
+    return resp
 
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH"])

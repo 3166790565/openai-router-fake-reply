@@ -30,14 +30,65 @@ api_key  = 你的上游 Key（原样透传给上游，本服务不保存）
 | 字段 | 说明 |
 |---|---|
 | `model_match` | `model` 子串匹配，大小写不敏感；空串 = 兜底（所有模型） |
-| `upstream_model` | 转发时改写为这个模型名；空串 = 保持客户端原值 |
+| `upstream_model` | 转发时改写为这个模型名；空串 = 保持客户端原值。无 `routes` 时生效 |
 | `keywords` | 关键词列表，任一出现在最后一条 user 消息中即命中 |
+| `patterns` | 正则整句模板列表，优先于 `keywords` 匹配 |
+| `match_max_length` | 消息超过此长度不造假（默认 40） |
+| `match_head_chars` | 关键词必须出现在前 N 字内（默认 15） |
+| `work_override` | 工作词黑名单，命中任一强制走上游 |
 | `replies` | 命中后随机选一条作为回复 |
+| `routes` | 掺水候选表，见下文 |
+| `first_msg` | Agent 首条加速配置，见下文 |
 | `fingerprint.enabled` | 指纹总开关 |
 | `fingerprint.apply_fake` | 假回复是否套指纹 |
 | `fingerprint.apply_proxy` | 转发响应是否套指纹 |
 
 **规则按列表顺序生效，第一条命中的规则胜出。** 把 `model_match=deepseek` 放在兜底规则之前即可。
+
+### 假回复匹配精度
+
+假回复命中分三层，按优先级：
+
+1. **正则整句模板** `patterns`：`^你是谁[？?]?$` 这种锚定整句的正则，最精准。无效正则自动跳过不影响服务。
+2. **关键词** `keywords`：子串匹配，但受三重闸门约束——消息长度 ≤ `match_max_length`、关键词出现在前 `match_head_chars` 字内、不含 `work_override` 黑名单词。
+3. **工作词黑名单** `work_override`：命中任一词（如"代码""翻译""角色"）强制走上游，防止正常对话被误判为身份询问。
+
+### 掺水路由 `routes`
+
+按权重随机把请求转发到不同模型，客户端无感知（配合指纹 `model="{model}"` 掩盖）：
+
+```json
+"routes": [
+  { "weight": 70, "upstream_model": "" },
+  { "weight": 20, "upstream_model": "deepseek-chat" },
+  { "weight": 10, "upstream_model": "glm-5.3", "supports_multimodal": false, "body_override": {"temperature": 0.6} }
+]
+```
+
+| 字段 | 说明 |
+|---|---|
+| `weight` | 权重，相对值，自动归一化 |
+| `upstream_model` | 目标模型名；空串 = 保持客户端原模型（不掺水档） |
+| `supports_multimodal` | 是否支持多模态；`false` 时含图片的请求自动跳过此候选 |
+| `body_override` | 转发前合并进请求体，用于需要固定参数的模型（如 Kimi K2 的 `temperature`） |
+
+多模态请求会从候选中排除 `supports_multimodal=false` 的模型，从剩余候选中重新抽签。全部排除则保持原模型。
+
+### Agent 首条加速 `first_msg`
+
+检测到 Claude Code / Codex 等 Agent 工具的首条预热消息时，用固定快模型转发，不参与掺水抽签：
+
+```json
+"first_msg": {
+  "enabled": true,
+  "fixed_model": "deepseek-v4.1-flash",
+  "detect_ua": ["claude-cli", "codex"],
+  "detect_system": ["You are Claude Code"],
+  "max_user_len": 20
+}
+```
+
+判定条件（全部满足）：`enabled=true` 且 `fixed_model` 非空 → UA 或 system prompt 任一命中 → 只有一条 user 消息 → 消息长度 ≤ `max_user_len`。命中假回复关键词时仍优先走假回复。
 
 ## 指纹模板
 
@@ -105,6 +156,17 @@ curl -N http://localhost:8000/v1/chat/completions \
   -d '{"model":"deepseek-chat","stream":true,"messages":[{"role":"user","content":"你是谁"}]}'
 ```
 
+## 请求日志
+
+每条 `/v1/chat/completions` 请求自动记录决策链路，存于 `data/logs/requests-YYYY-MM-DD.jsonl`（JSON Lines 按日分文件）：
+
+- **分支**：`fake`（假回复）/ `first_msg`（首条加速）/ `route`（掺水）/ `proxy`（直接转发）
+- **假回复细节**：命中方式（`pattern`/`keyword`/`work_override`）、回复内容摘要
+- **掺水细节**：实际抽中的模型、权重、因多模态被排除的候选列表
+- **通用字段**：用户消息摘要、耗时、状态码、token 用量
+
+日志字段截断（user 100 字、reply 200 字），异步写入不阻塞响应。`log_enabled` 控制总开关，`log_retention_days`（默认 7）控制保留天数，后台任务每小时清理过期文件。WebUI 日志页支持按分支/规则/日期过滤、分页浏览、点击展开详情。
+
 ## 配置与部署
 
 - 配置存于 `data/config.json`（挂载卷），原子写入；文件损坏时自动回退默认值并保留 `.bak`。
@@ -146,6 +208,6 @@ git pull && docker compose up -d --build
 
 - 指纹只作用于 `/v1/chat/completions` 的成功响应（`status < 400`），错误响应与其他接口不改写。
 - 转发改写模式会解压再重发响应（不再带 `content-encoding`）。
-- 关键词为纯子串匹配，不支持正则。
 - 单进程假设（uvicorn 单 worker）；多 worker 需自行加文件锁。
 - 本服务不保存任何上游密钥，客户端 `Authorization` 原样透传。
+- 日志文件写入为异步追加，极端并发下可能有行间交错（不影响 JSON 解析）。
