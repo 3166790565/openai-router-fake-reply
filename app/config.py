@@ -52,15 +52,22 @@ class Route(BaseModel):
 
 
 class FirstMsgBoost(BaseModel):
-    """Agent 工具首条预热加速：识别到首条短消息时走固定快模型。"""
+    """Agent 工具首条预热加速：识别到首条短消息时走固定快模型。
+
+    可配独立上游（upstream_base_url / api_key），为空则用全局上游
+    与客户端透传的 Authorization。api_key 会被持久化到 config.json，
+    公网部署时注意配置文件权限。
+    """
 
     enabled: bool = False
     detect_ua: list[str] = Field(default_factory=lambda: ["claude-cli", "codex"])
     detect_system: list[str] = Field(default_factory=lambda: ["You are Claude Code"])
     max_user_len: int = 20
     fixed_model: str = ""
+    upstream_base_url: str = ""
+    api_key: str = ""
 
-    @field_validator("fixed_model")
+    @field_validator("fixed_model", "upstream_base_url", "api_key")
     @classmethod
     def _strip_fixed(cls, v: str) -> str:
         return (v or "").strip()

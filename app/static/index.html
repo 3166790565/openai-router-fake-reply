@@ -237,7 +237,8 @@ function routeDefaults() {
 
 function fmDefaults() {
   return { enabled: false, detect_ua: ["claude-cli", "codex"],
-           detect_system: ["You are Claude Code"], max_user_len: 20, fixed_model: "" };
+           detect_system: ["You are Claude Code"], max_user_len: 20, fixed_model: "",
+           upstream_base_url: "", api_key: "" };
 }
 
 async function loadConfig() {
@@ -378,6 +379,16 @@ function ruleHtml(r, i) {
     </div>
     <div class="grid" style="margin-top:10px">
       <div>
+        <label>独立上游 Base URL（空 = 用全局上游）</label>
+        <input type="text" class="fm-url" value="${esc(fm.upstream_base_url)}" placeholder="https://api.deepseek.com/v1">
+      </div>
+      <div>
+        <label>独立上游 Key（空 = 透传客户端 Authorization）</label>
+        <input type="password" class="fm-key" value="${esc(fm.api_key)}" autocomplete="off" placeholder="sk-...（持久化保存）">
+      </div>
+    </div>
+    <div class="grid" style="margin-top:10px">
+      <div>
         <label>UA 识别（每行一个子串）</label>
         <textarea class="fm-ua" rows="2">${esc((fm.detect_ua || []).join("\n"))}</textarea>
       </div>
@@ -386,7 +397,7 @@ function ruleHtml(r, i) {
         <textarea class="fm-sys" rows="2">${esc((fm.detect_system || []).join("\n"))}</textarea>
       </div>
     </div>
-    <div class="muted" style="margin-top:6px">检测到 Agent 工具（Claude Code / Codex 等）的首条短消息时，用固定模型转发，不参与掺水抽签。命中假回复关键词时仍走假回复。</div>`;
+    <div class="muted" style="margin-top:6px">检测到 Agent 工具（Claude Code / Codex 等）的首条短消息时，用固定模型转发，不参与掺水抽签。可配独立上游（URL + Key 持久化保存），空则用全局上游。命中假回复关键词时仍走假回复。</div>`;
 
   const fpBadge = fp.enabled ? `<span class="badge badge-on">已启用</span>` : `<span class="badge badge-off">未启用</span>`;
   const fpBody = `
@@ -527,6 +538,8 @@ function bindRuleInputs() {
     on(".fm-maxlen", v => fm.max_user_len = Math.max(1, Number(v) || 20));
     on(".fm-ua", v => fm.detect_ua = lines(v));
     on(".fm-sys", v => fm.detect_system = lines(v));
+    on(".fm-url", v => fm.upstream_base_url = v.trim());
+    on(".fm-key", v => fm.api_key = v.trim());
 
     // 指纹
     const fp = r.fingerprint = r.fingerprint || fpDefaults();

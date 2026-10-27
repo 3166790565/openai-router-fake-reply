@@ -489,17 +489,26 @@ async def _proxy(
     raw: bytes,
     rule: Rule | None,
     client_model: str,
+    upstream_base_url: str | None = None,
+    upstream_api_key: str | None = None,
 ) -> Response:
     settings = config.get()
-    url = fingerprint.build_url(settings.upstream_base_url, path)
+    base_url = upstream_base_url or settings.upstream_base_url
+    url = fingerprint.build_url(base_url, path)
     fp = rule.fingerprint if rule else None
     rewrite = bool(fp and fp.enabled and fp.apply_proxy)
     mat = fingerprint.materialize(fp, client_model) if rewrite else {}
 
+    fwd_headers = _forward_headers(request)
+    # 独立上游时用配置的 key 覆盖客户端透传的 Authorization
+    if upstream_api_key:
+        fwd_headers = {k: v for k, v in fwd_headers.items() if k.lower() != "authorization"}
+        fwd_headers["Authorization"] = f"Bearer {upstream_api_key}"
+
     client = httpx.AsyncClient(timeout=settings.request_timeout)
     try:
         req = client.build_request(
-            request.method, url, headers=_forward_headers(request), content=raw
+            request.method, url, headers=fwd_headers, content=raw
         )
         upstream = await client.send(req, stream=True)
     except Exception as exc:
@@ -599,13 +608,20 @@ async def chat_completions(request: Request):
 
         # 2. Agent 首条加速分支
         if _is_agent_first_msg(request, body, rule.first_msg):
+            fm = rule.first_msg
             log_entry["branch"] = "first_msg"
             log_entry["first_msg_boost"] = True
-            log_entry["first_msg_model"] = rule.first_msg.fixed_model
-            body["model"] = rule.first_msg.fixed_model
+            log_entry["first_msg_model"] = fm.fixed_model
+            body["model"] = fm.fixed_model
             raw = json.dumps(body, ensure_ascii=False).encode()
-            log_entry["upstream_model"] = rule.first_msg.fixed_model
-            resp = await _proxy(request, "chat/completions", raw, rule, client_model)
+            log_entry["upstream_model"] = fm.fixed_model
+            if fm.upstream_base_url:
+                log_entry["first_msg_base_url"] = fm.upstream_base_url
+            resp = await _proxy(
+                request, "chat/completions", raw, rule, client_model,
+                upstream_base_url=fm.upstream_base_url or None,
+                upstream_api_key=fm.api_key or None,
+            )
             log_entry["status"] = resp.status_code
             log_entry["duration_ms"] = int((time.time() - t0) * 1000)
             asyncio.create_task(request_log.write(log_entry))
