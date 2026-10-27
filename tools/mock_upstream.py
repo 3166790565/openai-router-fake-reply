@@ -27,6 +27,23 @@ def _headers() -> dict:
     }
 
 
+@app.get("/v1/models")
+@app.get("/models")
+async def models():
+    """回显一个模型列表，用于测试 /models 中转。"""
+    return JSONResponse(
+        {
+            "object": "list",
+            "data": [
+                {"id": "deepseek-chat", "object": "model", "created": 1710000000, "owned_by": "deepseek"},
+                {"id": "deepseek-v4.1-flash", "object": "model", "created": 1720000000, "owned_by": "deepseek"},
+                {"id": "glm-5.3", "object": "model", "created": 1730000000, "owned_by": "zhipu"},
+            ],
+        },
+        headers=_headers(),
+    )
+
+
 @app.post("/v1/chat/completions")
 @app.post("/chat/completions")
 async def chat(request: Request):

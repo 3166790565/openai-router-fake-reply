@@ -48,7 +48,7 @@ def _auth_ok(header: str | None) -> bool:
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path
-    exempt = path.startswith("/v1") or path == "/chat/completions" or path == "/healthz"
+    exempt = path.startswith("/v1") or path == "/chat/completions" or path == "/models" or path == "/healthz"
     if not exempt and not _auth_ok(request.headers.get("authorization")):
         return Response(
             status_code=401,
@@ -643,3 +643,11 @@ async def chat_completions(request: Request):
 async def passthrough(path: str, request: Request):
     raw = await request.body()
     return await _proxy(request, f"/v1/{path}", raw, None, "")
+
+
+@app.api_route("/models", methods=["GET"])
+@app.api_route("/v1/models", methods=["GET"])
+async def models_proxy(request: Request):
+    """中转上游 /v1/models 接口，支持带/不带 /v1 前缀。"""
+    raw = await request.body()
+    return await _proxy(request, "models", raw, None, "")
